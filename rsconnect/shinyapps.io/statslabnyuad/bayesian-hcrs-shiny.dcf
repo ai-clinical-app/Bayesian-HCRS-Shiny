@@ -1,0 +1,10 @@
+name: bayesian-hcrs-shiny
+title:
+username: statslabnyuad
+account: statslabnyuad
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 17280541
+bundleId: 11939845
+url: https://statslabnyuad.shinyapps.io/bayesian-hcrs-shiny/
+version: 1
