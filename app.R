@@ -1,10 +1,8 @@
 library(shiny)
 library(ggplot2)
 
-# -----------------------------
-# HCRS coefficients and SEs
-# -----------------------------
-
+# Published reconstructed HCRS logistic-regression coefficients
+# Order: Intercept, Age, Visible haematuria, Male, Ex-smoker, Current smoker
 beta_hat <- c(
   Intercept = -8.0655,
   Age = 0.0553,
@@ -14,7 +12,7 @@ beta_hat <- c(
   CurrentSmoker = 0.9432
 )
 
-se <- c(
+se_hat <- c(
   Intercept = 0.4754,
   Age = 0.0059,
   VisibleHaematuria = 0.1946,
@@ -23,225 +21,329 @@ se <- c(
   CurrentSmoker = 0.2048
 )
 
-sigma0 <- 10
+# Weakly informative prior SD used in the paper
+prior_sd <- 10
 
-# Closed-form posterior under independent Normal summary likelihood
-post_var <- (se^2 * sigma0^2) / (se^2 + sigma0^2)
-post_mean <- (sigma0^2 / (se^2 + sigma0^2)) * beta_hat
-post_sd <- sqrt(post_var)
+inv_logit <- function(x) {
+  1 / (1 + exp(-x))
+}
 
-# -----------------------------
-# Helper functions
-# -----------------------------
+posterior_params_independent <- function(beta_hat, se_hat, prior_sd = 10) {
+  prior_var <- prior_sd^2
+  se_var <- se_hat^2
 
-simulate_risk <- function(age, visible, male, smoking, M = 10000) {
-  
+  post_var <- (se_var * prior_var) / (se_var + prior_var)
+  post_mean <- (prior_var / (se_var + prior_var)) * beta_hat
+
+  list(mean = post_mean, sd = sqrt(post_var))
+}
+
+simulate_hcrs_risk <- function(age, haematuria, sex, smoking, n_sim, threshold) {
+  post <- posterior_params_independent(beta_hat, se_hat, prior_sd)
+
   beta_draws <- matrix(
-    NA,
-    nrow = M,
+    rnorm(
+      n = n_sim * length(beta_hat),
+      mean = rep(post$mean, each = n_sim),
+      sd = rep(post$sd, each = n_sim)
+    ),
+    nrow = n_sim,
     ncol = length(beta_hat)
   )
-  
-  for (k in seq_along(beta_hat)) {
-    beta_draws[, k] <- rnorm(M, mean = post_mean[k], sd = post_sd[k])
-  }
-  
-  ex_smoker <- ifelse(smoking == "Ex-smoker", 1, 0)
-  current_smoker <- ifelse(smoking == "Current smoker", 1, 0)
-  
+
+  colnames(beta_draws) <- names(beta_hat)
+
   x <- c(
     Intercept = 1,
     Age = age,
-    VisibleHaematuria = visible,
-    Male = male,
-    ExSmoker = ex_smoker,
-    CurrentSmoker = current_smoker
+    VisibleHaematuria = ifelse(haematuria == "Visible", 1, 0),
+    Male = ifelse(sex == "Male", 1, 0),
+    ExSmoker = ifelse(smoking == "Ex-smoker", 1, 0),
+    CurrentSmoker = ifelse(smoking == "Current smoker", 1, 0)
   )
-  
-  eta <- beta_draws %*% x
-  risk <- plogis(eta)
-  
-  return(as.numeric(risk))
+
+  eta <- as.numeric(beta_draws %*% x)
+  p <- inv_logit(eta)
+
+  list(
+    draws = p,
+    mean = mean(p),
+    median = median(p),
+    lower = quantile(p, 0.025),
+    upper = quantile(p, 0.975),
+    threshold_prob = mean(p >= threshold)
+  )
 }
 
-# -----------------------------
-# UI
-# -----------------------------
+calculate_hcrs_points <- function(age, haematuria, sex, smoking) {
+  age_points <- age
+
+  haematuria_points <- ifelse(haematuria == "Visible", 24.5, 0)
+  sex_points <- ifelse(sex == "Male", 10.5, 0)
+
+  smoking_points <- switch(
+    smoking,
+    "Non-smoker" = 0,
+    "Ex-smoker" = 7.5,
+    "Current smoker" = 17.1,
+    0
+  )
+
+  age_points + haematuria_points + sex_points + smoking_points
+}
 
 ui <- fluidPage(
-  
   titlePanel("Bayesian HCRS Risk Uncertainty Tool"),
-  
+
   sidebarLayout(
-    
     sidebarPanel(
-      
+      h4("Patient profile"),
+
       numericInput(
-        inputId = "age",
-        label = "Age",
+        "age",
+        "Age",
         value = 70,
         min = 18,
         max = 100,
         step = 1
       ),
-      
+
       selectInput(
-        inputId = "haematuria",
-        label = "Haematuria type",
-        choices = c(
-          "Non-visible haematuria" = 0,
-          "Visible haematuria" = 1
-        ),
-        selected = 1
+        "haematuria",
+        "Haematuria type",
+        choices = c("Non-visible", "Visible"),
+        selected = "Visible"
       ),
-      
+
       selectInput(
-        inputId = "sex",
-        label = "Sex",
-        choices = c(
-          "Female" = 0,
-          "Male" = 1
-        ),
-        selected = 1
+        "sex",
+        "Sex",
+        choices = c("Female", "Male"),
+        selected = "Male"
       ),
-      
+
       selectInput(
-        inputId = "smoking",
-        label = "Smoking status",
-        choices = c(
-          "Never smoker",
-          "Ex-smoker",
-          "Current smoker"
-        ),
+        "smoking",
+        "Smoking status",
+        choices = c("Non-smoker", "Ex-smoker", "Current smoker"),
         selected = "Current smoker"
       ),
-      
-      sliderInput(
-        inputId = "threshold",
-        label = "Decision threshold",
-        min = 0,
-        max = 1,
+
+      hr(),
+
+      h4("RBUS result"),
+
+      selectInput(
+        "rbus",
+        "Renal bladder ultrasound result",
+        choices = c(
+          "Not available",
+          "Normal",
+          "Suspicious for bladder cancer"
+        ),
+        selected = "Not available"
+      ),
+
+      hr(),
+
+      h4("Bayesian uncertainty settings"),
+
+      numericInput(
+        "threshold",
+        "Risk threshold",
         value = 0.30,
+        min = 0.01,
+        max = 0.99,
         step = 0.01
       ),
-      
+
       numericInput(
-        inputId = "M",
-        label = "Posterior simulations",
-        value = 10000,
+        "n_sim",
+        "Number of posterior simulations",
+        value = 8000,
         min = 1000,
-        max = 50000,
+        max = 100000,
         step = 1000
-      )
+      ),
+
+      actionButton("run", "Update calculation")
     ),
-    
+
     mainPanel(
-      
-      h3("Posterior predicted risk"),
-      
+      h3("Uncertainty-aware predicted cancer risk"),
+
       verbatimTextOutput("risk_summary"),
-      
-      plotOutput("risk_plot", height = "300px"),
-      
-      h3("Threshold-crossing uncertainty"),
-      
-      verbatimTextOutput("threshold_summary"),
-      
-      h3("Model note"),
-      
+
+      plotOutput("risk_plot", height = "350px"),
+
+      hr(),
+
+      h3("Published HCRS points-based score"),
+
+      verbatimTextOutput("hcrs_points_output"),
+
+      hr(),
+
+      h3("Combined HCRS--RBUS triage rule"),
+
+      verbatimTextOutput("hcrs_rbus_rule_output"),
+
+      hr(),
+
+      h4("Interpretation and disclaimer"),
+
       p(
-        "This app reconstructs the HCRS using published coefficients and standard errors. ",
-        "The default model assumes independent coefficient uncertainty under a Normal summary likelihood. ",
-        "Predictions should be interpreted as uncertainty-aware reconstructions of the published model, ",
-        "not as newly validated clinical recommendations."
+        "This application reconstructs the coefficient-based HCRS model using ",
+        "published regression coefficients and standard errors. It propagates ",
+        "coefficient uncertainty to patient-level predicted cancer risk using a ",
+        "Bayesian summary-likelihood approximation."
+      ),
+
+      p(
+        "The app also displays the published points-based HCRS and the ",
+        "HCRS--RBUS cystoscopy triage rule. In the published validation study, ",
+        "cystoscopy was recommended for patients with HCRS >= 82 and/or suspicious RBUS."
+      ),
+
+      p(
+        strong("Important: "),
+        "This tool is for methodological demonstration and research use only. ",
+        "It is not a clinical decision tool and should not replace clinician assessment, ",
+        "local guidelines, or validated diagnostic pathways."
       )
     )
   )
 )
 
-# -----------------------------
-# Server
-# -----------------------------
-
 server <- function(input, output, session) {
-  
-  risk_draws <- reactive({
-    simulate_risk(
+
+  results <- eventReactive(input$run, {
+    set.seed(123)
+
+    simulate_hcrs_risk(
       age = input$age,
-      visible = as.numeric(input$haematuria),
-      male = as.numeric(input$sex),
+      haematuria = input$haematuria,
+      sex = input$sex,
       smoking = input$smoking,
-      M = input$M
+      n_sim = input$n_sim,
+      threshold = input$threshold
+    )
+  }, ignoreNULL = FALSE)
+
+  hcrs_points <- reactive({
+    calculate_hcrs_points(
+      age = input$age,
+      haematuria = input$haematuria,
+      sex = input$sex,
+      smoking = input$smoking
     )
   })
-  
-  output$risk_summary <- renderPrint({
-    
-    risk <- risk_draws()
-    
-    risk_mean <- mean(risk)
-    risk_median <- median(risk)
-    risk_ci <- quantile(risk, probs = c(0.025, 0.975))
-    
-    cat("Posterior mean risk:   ", round(risk_mean, 3), "\n")
-    cat("Posterior median risk: ", round(risk_median, 3), "\n")
-    cat("95% credible interval: [",
-        round(risk_ci[1], 3), ", ",
-        round(risk_ci[2], 3), "]\n", sep = "")
+
+  output$risk_summary <- renderText({
+    res <- results()
+
+    paste0(
+      "Posterior mean predicted risk: ", round(res$mean, 3), "\n",
+      "Posterior median predicted risk: ", round(res$median, 3), "\n",
+      "95% credible interval: [",
+      round(res$lower, 3), ", ", round(res$upper, 3), "]\n",
+      "Decision threshold: ", round(input$threshold, 3), "\n",
+      "Pr(predicted risk >= threshold): ",
+      round(res$threshold_prob, 3)
+    )
   })
-  
+
   output$risk_plot <- renderPlot({
-    
-    risk <- risk_draws()
-    risk_ci <- quantile(risk, probs = c(0.025, 0.975))
-    risk_median <- median(risk)
-    
-    df <- data.frame(risk = risk)
-    
+    res <- results()
+
+    df <- data.frame(risk = res$draws)
+
     ggplot(df, aes(x = risk)) +
       geom_histogram(
         aes(y = after_stat(density)),
         bins = 40,
-        fill = "grey85",
-        colour = "black"
+        fill = "grey80",
+        colour = "grey30"
       ) +
-      geom_density(linewidth = 0.9) +
+      geom_density(linewidth = 1) +
       geom_vline(
-        xintercept = risk_median,
+        xintercept = res$median,
         linetype = "dashed",
-        linewidth = 0.8
+        linewidth = 1
       ) +
       geom_vline(
-        xintercept = risk_ci,
+        xintercept = c(res$lower, res$upper),
         linetype = "dotted",
-        linewidth = 0.8
+        linewidth = 1
+      ) +
+      geom_vline(
+        xintercept = input$threshold,
+        colour = "red",
+        linetype = "longdash",
+        linewidth = 1
       ) +
       labs(
         x = "Predicted cancer risk",
-        y = "Density"
+        y = "Density",
+        title = "Posterior distribution of predicted cancer risk",
+        subtitle = "Dashed = median; dotted = 95% credible interval; red = selected threshold"
       ) +
-      theme_classic(base_size = 12)
+      theme_minimal(base_size = 14)
   })
-  
-  output$threshold_summary <- renderPrint({
-    
-    risk <- risk_draws()
-    threshold <- input$threshold
-    
-    q_t <- mean(risk >= threshold)
-    
-    cat("Threshold t: ", threshold, "\n")
-    cat("Pr(risk >= t): ", round(q_t, 3), "\n\n")
-    
-    if (q_t > 0.95) {
-      cat("Classification is highly stable above the threshold.\n")
-    } else if (q_t < 0.05) {
-      cat("Classification is highly stable below the threshold.\n")
-    } else if (q_t > 0.25 && q_t < 0.75) {
-      cat("Classification is sensitive to parameter uncertainty.\n")
-    } else {
-      cat("Classification shows moderate uncertainty.\n")
-    }
+
+  output$hcrs_points_output <- renderText({
+    pts <- hcrs_points()
+
+    paste0(
+      "Published HCRS points score = ", round(pts, 1), "\n",
+      "Published HCRS cutoff = 82\n\n",
+      "Point components:\n",
+      "Age: ", input$age, "\n",
+      "Visible haematuria: ",
+      ifelse(input$haematuria == "Visible", "24.5", "0"), "\n",
+      "Male sex: ",
+      ifelse(input$sex == "Male", "10.5", "0"), "\n",
+      "Smoking: ",
+      switch(
+        input$smoking,
+        "Non-smoker" = "0",
+        "Ex-smoker" = "7.5",
+        "Current smoker" = "17.1"
+      ),
+      "\n\n",
+      "HCRS-only recommendation: ",
+      ifelse(
+        pts >= 82,
+        "Cystoscopy recommended based on HCRS points.",
+        "Below HCRS points cutoff."
+      )
+    )
+  })
+
+  output$hcrs_rbus_rule_output <- renderText({
+    pts <- hcrs_points()
+
+    hcrs_positive <- pts >= 82
+    rbus_positive <- input$rbus == "Suspicious for bladder cancer"
+
+    combined_positive <- hcrs_positive || rbus_positive
+
+    paste0(
+      "Combined HCRS--RBUS rule:\n",
+      "Cystoscopy recommended if HCRS >= 82 and/or RBUS is suspicious.\n\n",
+      "Current HCRS points score: ", round(pts, 1), "\n",
+      "RBUS result: ", input$rbus, "\n\n",
+      "Combined recommendation: ",
+      ifelse(
+        combined_positive,
+        "Cystoscopy recommended under the published HCRS--RBUS triage rule.",
+        "Cystoscopy may be omitted under the published HCRS--RBUS triage rule, subject to clinical judgement."
+      ),
+      "\n\n",
+      "Note: The Bayesian uncertainty interval above applies to the reconstructed ",
+      "coefficient-based HCRS logistic model. The RBUS result is implemented here ",
+      "as a deterministic rule-based triage modifier."
+    )
   })
 }
 
