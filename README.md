@@ -59,9 +59,13 @@ The app displays:
 
 ---
 
-## Source model
+## Source publications
 
-This app reconstructs the Haematuria Cancer Risk Score described in:
+This app is based on two related DETECT I publications.
+
+### 1. HCRS model development and validation
+
+The coefficient-based and points-based Haematuria Cancer Risk Score are based on:
 
 Tan WS, Ahmad A, Feber A, Mostafid H, Cresswell J, Fankhauser CD, Waisbrod S, Hermanns T, Sasieni P, Kelly JD; DETECT I trial collaborators.  
 **Development and validation of a haematuria cancer risk score to identify patients at risk of harbouring cancer.**  
@@ -71,6 +75,17 @@ PMCID: PMC6446724
 PMID: 30521125  
 
 Article: https://pmc.ncbi.nlm.nih.gov/articles/PMC6446724/
+
+### 2. RBUS imaging and haematuria investigation study
+
+The renal bladder ultrasound component and imaging-triage context are based on:
+
+Tan WS, Sarpong R, Khetrapal P, et al.  
+**Can Renal and Bladder Ultrasound Replace Computerized Tomography Urogram in Patients Investigated for Microscopic Hematuria?**  
+*Journal of Urology.* 2018;200(5):973–980.  
+doi: 10.1016/j.juro.2018.05.024  
+
+Article: https://pmc.ncbi.nlm.nih.gov/articles/PMC6179963/
 
 ---
 
